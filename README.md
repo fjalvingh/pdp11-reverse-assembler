@@ -50,9 +50,12 @@ WRTLCK. Anything else shows as `.WORD nnnnnn`.
 terminal:
 
 ```
-git clone https://github.com/dmsc/emu2 && make -C emu2
-EMU2=$PWD/emu2/emu2 ./build.sh
+./build.sh
 ```
+
+It uses `$EMU2` if set, else `emu2` from your PATH. Failing both, it clones
+and builds emu2 into `tools/emu2/` on first use (needs git, make and a C
+compiler).
 
 The script copies `iadisk/TABLES/AIAL.txt` to `\HP64700\TABLES\AIAL`, where
 the assembler expects it. It then assembles, checks `Errors= 0` and writes the

@@ -8,7 +8,21 @@
 # (listing) and out/IPDP11 (analyzer disk file, see tools/mkiafile.py).
 set -e
 cd "$(dirname "$0")"
-EMU2=${EMU2:-emu2}
+
+# Find emu2: $EMU2, then PATH, then a local build in tools/emu2 (built from
+# source on first use; needs git, make and a C compiler).
+if [ -z "$EMU2" ]; then
+    if command -v emu2 >/dev/null 2>&1; then
+        EMU2=emu2
+    else
+        EMU2=$PWD/tools/emu2/emu2
+        if [ ! -x "$EMU2" ]; then
+            echo "emu2 not found, building it in tools/emu2 ..." >&2
+            [ -d tools/emu2 ] || git clone --depth 1 https://github.com/dmsc/emu2 tools/emu2
+            make -C tools/emu2 >/dev/null
+        fi
+    fi
+fi
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 
