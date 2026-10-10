@@ -1,0 +1,1715 @@
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    1
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+                        1 "IAL"
+                        2 ************************************************************************
+                        3 *
+                        4 *  INVERSE ASSEMBLER FOR THE DEC PDP-11 (UNIBUS)
+                        5 *
+                        6 *  For HP 1650/1660/1670, 16500 and 16600/16700 series logic analyzers.
+                        7 *  Assemble with the HP 10391B Inverse Assembler Development Package:
+                        8 *
+                        9 *      ASM IPDP11.S
+                       10 *
+                       11 *  Download / convert with IALDOWN (or the 16700 IA Format utility)
+                       12 *  using "Invasm" field option B (Invasm field, no pop-up).
+                       13 *
+                       14 ************************************************************************
+                       15 *
+                       16 *  ANALYZER LABELS (all Unibus signals are asserted low; set the label
+                       17 *  polarity to negative "-" in the Format menu so that 1 = asserted):
+                       18 *
+                       19 *    ADDR   18 bits   A<17:00>
+                       20 *    DATA   16 bits   D<15:00>
+                       21 *    STAT    3 bits   bit 0 = C0
+                       22 *                     bit 1 = C1
+                       23 *                     bit 2 = INTR  (connect to ground if not probed)
+                       24 *
+                       25 *    C1 C0   0 0  DATI    0 1  DATIP    1 0  DATO    1 1  DATOB
+                       26 *
+                       27 *  STATE CLOCK: the negating (trailing) edge of MSYN.  Address, data
+                       28 *  and C1/C0 are all still valid on the bus at that point for every
+                       29 *  CPU and DMA transfer.
+                       30 *
+                       31 ************************************************************************
+                       32 *
+                       33 *  HOW IT WORKS
+                       34 *
+                       35 *  The Unibus does not say whether a DATI is an instruction fetch or a
+                       36 *  data read, so the inverse assembler must be synchronized by hand:
+                       37 *  roll a state that is an instruction fetch to the top of the listing
+                       38 *  and select the "Invasm" field.  From then on, each decoded
+                       39 *  instruction looks ahead in the trace:
+                       40 *
+                       41 *  - the extension words (immediate, absolute, index) are the reads of
+                       42 *    the following addresses; they are tagged "operand",
+                       43 *  - the next instruction fetch is predicted from the instruction:
+                       44 *    the next sequential address, either branch destination, a jump
+                       45 *    target taken from an extension word, or (for RTS PC, RTI, RTT and
+                       46 *    indirect JMP/JSR) the data of the read that fetched the new PC,
+                       47 *  - a read from the vector area (below VEC_LIMIT) followed by a read
+                       48 *    of the next word is taken to be an interrupt or trap vector; the
+                       49 *    new PC is the data of the first of those two reads,
+                       50 *  - every other cycle in between is tagged as a data cycle.
+                       51 *
+                       52 *  The predicted next fetch is tagged and is decoded when the listing
+                       53 *  reaches it, so the chain continues for as long as the analyzer
+                       54 *  keeps finding the next fetch within SCANMAX states.
+                       55 *
+                       56 ************************************************************************
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    2
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+                       57 
+    0000 00000000      58           LABEL_TITLE   ^PDP-11 Mnemonic^
+    002D 0008056F      59           BASE_TITLE    ^octal^
+    0031 0024          60           DEFAULT_WIDTH 36
+    0030 7530          61           MAX_INSTRUCTION 30000
+                       62 
+                       63 *
+                       64 *  Tunables
+                       65 *
+             < 0020 >  66 SCANMAX   CONSTANT  32              ; states searched for the next fetch
+             < 000C >  67 GUESSMAX  CONSTANT  12              ; same, when recovering a lost chain
+    0034 02000000      68 VEC_LIMIT CONSTANT  1000Q           ; reads below this may be vectors
+                       69 
+                       70 *
+                       71 *  Masks and flags
+                       72 *
+    0036 FFFF0003      73 A18       CONSTANT  777777Q         ; Unibus address
+    0038 FFFF0000      74 W16       CONSTANT  177777Q         ; Unibus data word
+    003A 1FFF0000      75 PG13      CONSTANT  17777Q          ; offset within an 8KB MMU page
+         < FFFFFFFF >  76 NOMATCH   CONSTANT  0FFFFFFFFH      ; never equal to a bus address
+    003C FFFF0000      77 UTAGMASK  CONSTANT  0FFFFH          ; user part of INPUT_TAG
+    000B 24202020      78 BLANKS    ASCII     "                                    "
+                       79 
+                       80 *
+                       81 *  User tags written into the acquisition memory
+                       82 *
+             < 0001 >  83 TG_FETCH  CONSTANT  1               ; instruction fetch
+             < 0002 >  84 TG_OPER   CONSTANT  2               ; extension word of an instruction
+             < 0003 >  85 TG_DATA   CONSTANT  3               ; data cycle of an instruction
+             < 0004 >  86 TG_VEC    CONSTANT  4               ; interrupt / trap vector read
+                       87 
+                       88 *
+                       89 *  How the next instruction fetch is found (TTYPE)
+                       90 *
+             < 0000 >  91 TT_SEQ    CONSTANT  0               ; next sequential instruction
+             < 0001 >  92 TT_BRANCH CONSTANT  1               ; sequential or BRT
+             < 0002 >  93 TT_OPWABS CONSTANT  2               ; target = last extension word
+             < 0003 >  94 TT_OPWREL CONSTANT  3               ; target = PC relative extension word
+             < 0004 >  95 TT_READ   CONSTANT  4               ; target = data of data read NSKIP
+             < 0005 >  96 TT_UNKN   CONSTANT  5               ; first read after NSKIP data reads
+                       97 
+                       98 *
+                       99 *  Variables
+                      100 *
+    003E 00000000     101 OPC       VARIABLE  0               ; opcode being decoded
+    0040 00000000     102 PCA       VARIABLE  0               ; its bus address
+    0042 00000000     103 CURSTAT   VARIABLE  0               ; STAT of the state being displayed
+    0044 00000000     104 TAGCUR    VARIABLE  0               ; user tag of that state
+    0046 00000000     105 NOPW      VARIABLE  0               ; number of extension words
+    0048 00000000     106 OPWN      VARIABLE  0               ; extension words found
+    004A 00000000     107 OPW1      VARIABLE  0               ; first extension word
+    004C 00000000     108 OPW2      VARIABLE  0               ; second extension word
+    004E 00000000     109 NXOPW     VARIABLE  0               ; address of next extension word
+    0050 00000000     110 OPWI      VARIABLE  0               ; extension words printed so far
+    0052 00000000     111 OPWA      VARIABLE  0               ; address of word being printed
+    0054 00000000     112 OPWMISS   VARIABLE  0               ; extension word was not found
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    3
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    0056 00000000     113 TTYPE     VARIABLE  0               ; next fetch prediction method
+    0058 00000000     114 NSKIP     VARIABLE  0               ; data reads before next fetch
+    005A 00000000     115 BRT       VARIABLE  0               ; branch destination
+    005C 00000000     116 CAND1     VARIABLE  0               ; next fetch address candidates
+    005E 00000000     117 CAND2     VARIABLE  0
+    0060 00000000     118 CMPMASK   VARIABLE  0               ; address bits compared
+    0062 00000000     119 CANDOK    VARIABLE  0               ; candidates are valid
+    0064 00000000     120 DREADS    VARIABLE  0               ; data reads seen while scanning
+    0066 00000000     121 NS        VARIABLE  0               ; scan offset from current state
+    0068 00000000     122 MS        VARIABLE  0               ; peek offset
+    006A 00000000     123 CURADDR   VARIABLE  0               ; scanned state address
+    006C 00000000     124 CURDATA   VARIABLE  0               ; scanned state data
+    006E 00000000     125 VEC2A     VARIABLE  0               ; address of second vector word
+    0070 00000000     126 FOUNDV    VARIABLE  0               ; vector pair found
+    0072 00000000     127 TAGV      VARIABLE  0               ; tag to write
+    0074 00000000     128 FW        VARIABLE  0               ; extension words of one operand
+    0076 00000000     129 EAF       VARIABLE  0               ; mode/register field
+    0078 00000000     130 EAREG     VARIABLE  0               ; register number
+    007A 00000000     131 TMP       VARIABLE  0
+    007C 00000000     132 BASE      VARIABLE  0               ; PC value for PC relative operands
+    007E 00000000     133 CONF      VARIABLE  0               ; 1 = state known to be a fetch
+    0080 00000000     134 FOUNDF    VARIABLE  0               ; SCAN: 1 found, 2 end of trace
+    0082 00000000     135 SCLIM     VARIABLE  0               ; SCAN: states to search
+    0084 00000000     136 VECOK     VARIABLE  0               ; SCAN: may follow a vector fetch
+    0086 00000000     137 INTRV     VARIABLE  0               ; SCAN: vector seen on an INTR cycle
+    0088 00000000     138 VP2       VARIABLE  0               ; SCAN: offset of second vector word
+    008A 00000000     139 LASTW     VARIABLE  0               ; address of the last DATO seen
+                      140 
+                      141 *
+                      142 *  Display formats
+                      143 *
+    001E 204601E0     144 O6        FORMAT    16,OCT,6
+    0020 24460220     145 P6        FORMAT    18,OCT,6
+    0022 204300E0     146 O3        FORMAT    8,OCT,3
+    0024 204200A0     147 O2        FORMAT    6,OCT,2
+    0026 20410040     148 O1        FORMAT    3,OCT,1
+                      149 
+                      150 ************************************************************************
+                      151 *
+                      152 *  ENTRY
+                      153 *
+                      154 ************************************************************************
+    0000              155 START
+    0000 3007         156           SET       RETURN_FLAGS,0
+    0001 1005         157           LOAD      INITIAL_ADDRESS
+    0002 161B         158           AND       A18
+    0003 0820         159           STORE     PCA
+    0004 1006         160           LOAD      INITIAL_DATA
+    0005 161C         161           AND       W16
+    0006 081F         162           STORE     OPC
+    0007 100E         163           LOAD      INPUT_STATUS
+    0008 0821         164           STORE     CURSTAT
+    0009 100F         165           LOAD      INPUT_TAG
+    000A 161E         166           AND       UTAGMASK
+    000B 0822         167           STORE     TAGCUR
+    000C 100F         168           LOAD      INPUT_TAG
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    4
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    000D BA3001C0     169           IF        17,16 <> 0 THEN GOTO SYNCED
+    0010 3022         170           SET       TAGCUR,0                ; not synchronized: raw cycle
+    0011 447D         171           GOTO      SHOWCYC
+    0012              172 SYNCED
+    0012 1021         173           LOAD      CURSTAT
+    0013 A44201C1     174           IF        2,2 = 1 THEN GOTO SHOWCYC      ; interrupt vector transfer
+    0016 A42101C1     175           IF        1,1 = 1 THEN GOTO SHOWCYC      ; DATO / DATOB
+    0019 323F         176           SET       CONF,1
+    001A 842201C1     177           IF        TAGCUR = TG_FETCH THEN GOTO DECODE
+                      178 *
+                      179 *  If the state before this one was never disassembled, this is where
+                      180 *  "Invasm" was selected: decode it whatever it was tagged before.
+                      181 *  Otherwise a read that no instruction claimed means the chain of
+                      182 *  fetches was lost; try it as an instruction, and keep it only if its
+                      183 *  own next fetch is found (see the end of DECODE).
+                      184 *
+    001D 05BF         185           INPUT     REL,-1
+    001E 980B01C0     186           IF        INPUT_ERROR <> 0 THEN GOTO SYNCPT
+    0021 100F         187           LOAD      INPUT_TAG
+    0022 A63001C0     188           IF        17,16 = 0 THEN GOTO SYNCPT
+    0025 982201C0     189           IF        TAGCUR <> 0 THEN GOTO SHOWCYC
+    0028 303F         190           SET       CONF,0
+    0029              191 SYNCPT
+    0029 05C0         192           INPUT     REL,0
+    002A 1DC1         193           TAG_WITH  TG_FETCH
+                      194 
+                      195 ************************************************************************
+                      196 *
+                      197 *  DECODE THE INSTRUCTION IN OPC
+                      198 *
+                      199 *  Each handler outputs the mnemonic, sets NOPW / TTYPE (and BRT, NSKIP)
+                      200 *  as needed, calls SCAN to find the extension words and the next
+                      201 *  instruction fetch, and then outputs the operands.
+                      202 *
+                      203 ************************************************************************
+    002B              204 DECODE
+    002B 3207         205           SET       RETURN_FLAGS,1
+    002C 103F         206           LOAD      CONF                    ; a guess may only trap if it
+    002D 0842         207           STORE     VECOK                   ; is a trap instruction
+    002E 3023         208           SET       NOPW,0
+    002F 302B         209           SET       TTYPE,TT_SEQ
+    0030 302C         210           SET       NSKIP,0
+    0031 3028         211           SET       OPWI,0
+    0032 101F         212           LOAD      OPC
+    0033 E1EC0034     213           CASE_OF   15,12
+    0035 5095         214           CALL      GRP0                    ; 00xxxx
+    0036 5058         215           CALL      DBL                     ; 01 MOV
+    0037 5058         216           CALL      DBL                     ; 02 CMP
+    0038 5058         217           CALL      DBL                     ; 03 BIT
+    0039 5058         218           CALL      DBL                     ; 04 BIC
+    003A 5058         219           CALL      DBL                     ; 05 BIS
+    003B 5058         220           CALL      DBL                     ; 06 ADD
+    003C 5191         221           CALL      GRP7                    ; 07 EIS FIS SOB
+    003D 5164         222           CALL      GRP10                   ; 10xxxx
+    003E 5058         223           CALL      DBL                     ; 11 MOVB
+    003F 5058         224           CALL      DBL                     ; 12 CMPB
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    5
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    0040 5058         225           CALL      DBL                     ; 13 BITB
+    0041 5058         226           CALL      DBL                     ; 14 BICB
+    0042 5058         227           CALL      DBL                     ; 15 BISB
+    0043 5058         228           CALL      DBL                     ; 16 SUB
+    0044 51D7         229           CALL      FPP                     ; 17 floating point
+    0034 0010         230           CASE_END
+                      231 *
+                      232 *  A guessed instruction whose next fetch was not found was not an
+                      233 *  instruction: undo its tags and show it as a bus cycle instead.
+                      234 *
+    0045 843F01C1     235           IF        CONF = 1 THEN GOTO DEC_CHK
+    0048 841F01C0     236           IF        OPC = 0 THEN SET FOUNDF,0      ; zero data is no HALT
+    004B              237 DEC_CHK
+    004B 984001C0     238           IF        FOUNDF <> 0 THEN RETURN
+    004E 5355         239           CALL      SC_CLR
+    004F 843F01C1     240           IF        CONF = 1 THEN RETURN
+    0052 02C1         241           POSITION  ABS,1
+    0053 600B         242           OUTPUT    BLANKS
+    0054 05C0         243           INPUT     REL,0
+    0055 1DC0         244           TAG_WITH  0
+    0056 3022         245           SET       TAGCUR,0
+    0057 447D         246           GOTO      SHOWCYC
+                      247 
+                      248 ************************************************************************
+                      249 *  Double operand  oSSDD
+                      250 ************************************************************************
+    0058              251 DBL
+    0058 E1EC0059     252           CASE_OF   15,12
+    005A 0010         253           NOP
+    005B 6028034D     254           OUTPUT    "MOV"
+    005C 602A0343     255           OUTPUT    "CMP"
+    005D 602C0342     256           OUTPUT    "BIT"
+    005E 602E0342     257           OUTPUT    "BIC"
+    005F 60300342     258           OUTPUT    "BIS"
+    0060 60320341     259           OUTPUT    "ADD"
+    0061 0010         260           NOP
+    0062 0010         261           NOP
+    0063 6034044D     262           OUTPUT    "MOVB"
+    0064 60370443     263           OUTPUT    "CMPB"
+    0065 603A0442     264           OUTPUT    "BITB"
+    0066 603D0442     265           OUTPUT    "BICB"
+    0067 60400442     266           OUTPUT    "BISB"
+    0068 60430353     267           OUTPUT    "SUB"
+    0059 000F         268           CASE_END
+    0069 101F         269           LOAD      OPC
+    006A 0246         270           ROTATE    RIGHT,6
+    006B 53F7         271           CALL      FWORDS
+    006C 103A         272           LOAD      FW
+    006D 0823         273           STORE     NOPW
+    006E 101F         274           LOAD      OPC
+    006F 53F7         275           CALL      FWORDS
+    0070 1023         276           LOAD      NOPW
+    0071 123A         277           ADD       FW
+    0072 0823         278           STORE     NOPW
+                      279 *
+                      280 *  An instruction that writes the PC changes the flow of control.
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    6
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+                      281 *
+    0073 101F         282           LOAD      OPC
+    0074 B8A001C7     283           IF        5,0 <> 7 THEN GOTO DBL_SCAN
+    0077 A5CC01C2     284           IF        14,12 = 2 THEN GOTO DBL_SCAN   ; CMP(B) does not write
+    007A A5CC01C3     285           IF        14,12 = 3 THEN GOTO DBL_SCAN   ; BIT(B) does not write
+    007D 0246         286           ROTATE    RIGHT,6
+    007E 5403         287           CALL      SRDS                    ; NSKIP = source data reads
+    007F 3A2B         288           SET       TTYPE,TT_UNKN
+    0080 101F         289           LOAD      OPC
+    0081 B9CC01C1     290           IF        14,12 <> 1 THEN GOTO DBL_SCAN  ; ADD x,PC etc.
+    0084 A56601D7     291           IF        11,6 = 27Q THEN SET TTYPE,TT_OPWABS ; MOV #x,PC
+    0087 A56601D7     292           IF        11,6 = 27Q THEN GOTO DBL_SCAN
+    008A 982C01C0     293           IF        NSKIP <> 0 THEN SET TTYPE,TT_READ   ; MOV (SP)+,PC etc.
+    008D              294 DBL_SCAN
+    008D 5289         295           CALL      SCAN
+    008E 02C9         296           POSITION  ABS,9
+    008F 101F         297           LOAD      OPC
+    0090 0246         298           ROTATE    RIGHT,6
+    0091 5417         299           CALL      EA
+    0092 6045012C     300           OUTPUT    ","
+    0093 101F         301           LOAD      OPC
+    0094 4417         302           GOTO      EA
+                      303 
+                      304 ************************************************************************
+                      305 *  Group 00xxxx
+                      306 ************************************************************************
+    0095              307 GRP0
+    0095 E1680096     308           CASE_OF   11,8
+    0097 40A7         309           GOTO      G00                     ; 0000xx-0003xx
+    0098 412A         310           GOTO      BR0                     ; BR
+    0099 412A         311           GOTO      BR0                     ; BNE
+    009A 412A         312           GOTO      BR0                     ; BEQ
+    009B 412A         313           GOTO      BR0                     ; BGE
+    009C 412A         314           GOTO      BR0                     ; BLT
+    009D 412A         315           GOTO      BR0                     ; BGT
+    009E 412A         316           GOTO      BR0                     ; BLE
+    009F 4108         317           GOTO      JSR                     ; 004RDD
+    00A0 4108         318           GOTO      JSR
+    00A1 4135         319           GOTO      SOP50                   ; CLR COM INC DEC
+    00A2 413C         320           GOTO      SOP54                   ; NEG ADC SBC TST
+    00A3 4143         321           GOTO      SOP60                   ; ROR ROL ASR ASL
+    00A4 414E         322           GOTO      SOP64                   ; MARK MFPI MTPI SXT
+    00A5 4155         323           GOTO      SOP70                   ; CSM - TSTSET WRTLCK
+    00A6 427E         324           GOTO      ILLEGAL                 ; 0074xx-0077xx
+    0096 0010         325           CASE_END
+                      326 
+    00A7              327 G00
+    00A7 E0E600A8     328           CASE_OF   7,6
+    00A9 40AD         329           GOTO      G000                    ; 00000x
+    00AA 4102         330           GOTO      JMP                     ; 0001DD
+    00AB 40C7         331           GOTO      G002                    ; 0002xx
+    00AC 4100         332           GOTO      SWAB                    ; 0003DD
+    00A8 0004         333           CASE_END
+                      334 
+    00AD              335 G000
+    00AD B8A301C0     336           IF        5,3 <> 0 THEN GOTO ILLEGAL
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    7
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    00B0 E04000B1     337           CASE_OF   2,0
+    00B2 60460448     338           OUTPUT    "HALT"
+    00B3 60490457     339           OUTPUT    "WAIT"
+    00B4 40C1         340           GOTO      RTI
+    00B5 40BB         341           GOTO      BPT
+    00B6 40BE         342           GOTO      IOT
+    00B7 604C0552     343           OUTPUT    "RESET"
+    00B8 40C3         344           GOTO      RTT
+    00B9 604F044D     345           OUTPUT    "MFPT"
+    00B1 0008         346           CASE_END
+    00BA 4255         347           GOTO      NOOPND
+                      348 
+    00BB              349 BPT
+    00BB 60520342     350           OUTPUT    "BPT"
+    00BC 3242         351           SET       VECOK,1
+    00BD 4255         352           GOTO      NOOPND
+    00BE              353 IOT
+    00BE 60540349     354           OUTPUT    "IOT"
+    00BF 3242         355           SET       VECOK,1
+    00C0 4255         356           GOTO      NOOPND
+    00C1              357 RTI
+    00C1 60560352     358           OUTPUT    "RTI"
+    00C2 40C4         359           GOTO      RTXX
+    00C3              360 RTT
+    00C3 60580352     361           OUTPUT    "RTT"
+    00C4              362 RTXX
+    00C4 382B         363           SET       TTYPE,TT_READ           ; new PC is the first pop
+    00C5 322C         364           SET       NSKIP,1
+    00C6 4255         365           GOTO      NOOPND
+                      366 
+    00C7              367 G002
+    00C7 E0A300C8     368           CASE_OF   5,3
+    00C9 40D1         369           GOTO      RTS                     ; 00020R
+    00CA 427E         370           GOTO      ILLEGAL                 ; 00021x
+    00CB 427E         371           GOTO      ILLEGAL                 ; 00022x
+    00CC 40DC         372           GOTO      SPL                     ; 00023N
+    00CD 40E2         373           GOTO      CCOPS                   ; 00024x
+    00CE 40E2         374           GOTO      CCOPS                   ; 00025x
+    00CF 40E2         375           GOTO      CCOPS                   ; 00026x
+    00D0 40E2         376           GOTO      CCOPS                   ; 00027x
+    00C8 0008         377           CASE_END
+                      378 
+    00D1              379 RTS
+    00D1 605A0352     380           OUTPUT    "RTS"
+    00D2 3A2B         381           SET       TTYPE,TT_UNKN           ; RTS Rn: PC = Rn, then pop
+    00D3 322C         382           SET       NSKIP,1
+    00D4 101F         383           LOAD      OPC
+    00D5 A44001C7     384           IF        2,0 = 7 THEN SET TTYPE,TT_READ ; RTS PC: PC = pop
+    00D8 5289         385           CALL      SCAN
+    00D9 02C9         386           POSITION  ABS,9
+    00DA 101F         387           LOAD      OPC
+    00DB 446F         388           GOTO      REG20
+                      389 
+    00DC              390 SPL
+    00DC 605C0353     391           OUTPUT    "SPL"
+    00DD 5289         392           CALL      SCAN
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    8
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    00DE 02C9         393           POSITION  ABS,9
+    00DF 101F         394           LOAD      OPC
+    00E0 7026         395           OUTPUT    ACCUMULATOR,O1
+    00E1 0013         396           RETURN
+                      397 
+    00E2              398 CCOPS
+    00E2 A46001C0     399           IF        3,0 = 0 THEN GOTO CC_NOP
+    00E5 A46001CF     400           IF        3,0 = 17Q THEN GOTO CC_ALL
+    00E8 E08400E9     401           CASE_OF   4,4
+    00EA 605E0243     402           OUTPUT    "CL"
+    00EB 60600253     403           OUTPUT    "SE"
+    00E9 0002         404           CASE_END
+    00EC A46301C1     405           IF        3,3 = 1 THEN OUTPUT "N"
+    00EF A44201C1     406           IF        2,2 = 1 THEN OUTPUT "Z"
+    00F2 A42101C1     407           IF        1,1 = 1 THEN OUTPUT "V"
+    00F5 A40001C1     408           IF        0,0 = 1 THEN OUTPUT "C"
+    00F8 4255         409           GOTO      NOOPND
+    00F9              410 CC_NOP
+    00F9 6066034E     411           OUTPUT    "NOP"
+    00FA 4255         412           GOTO      NOOPND
+    00FB              413 CC_ALL
+    00FB E08400FC     414           CASE_OF   4,4
+    00FD 60680343     415           OUTPUT    "CCC"
+    00FE 606A0353     416           OUTPUT    "SCC"
+    00FC 0002         417           CASE_END
+    00FF 4255         418           GOTO      NOOPND
+                      419 
+    0100              420 SWAB
+    0100 606C0453     421           OUTPUT    "SWAB"
+    0101 4249         422           GOTO      SOP
+                      423 
+    0102              424 JMP
+    0102 606F034A     425           OUTPUT    "JMP"
+    0103 5110         426           CALL      JTGT
+    0104 5289         427           CALL      SCAN
+    0105 02C9         428           POSITION  ABS,9
+    0106 101F         429           LOAD      OPC
+    0107 4417         430           GOTO      EA
+                      431 
+    0108              432 JSR
+    0108 6071034A     433           OUTPUT    "JSR"
+    0109 5110         434           CALL      JTGT
+    010A 5289         435           CALL      SCAN
+    010B 02C9         436           POSITION  ABS,9
+    010C 546D         437           CALL      REG86
+    010D 6073012C     438           OUTPUT    ","
+    010E 101F         439           LOAD      OPC
+    010F 4417         440           GOTO      EA
+                      441 
+                      442 *
+                      443 *  JTGT - how to find the target of JMP / JSR
+                      444 *
+    0110              445 JTGT
+    0110 101F         446           LOAD      OPC
+    0111 53F7         447           CALL      FWORDS
+    0112 103A         448           LOAD      FW
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    9
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    0113 0823         449           STORE     NOPW
+    0114 101F         450           LOAD      OPC
+    0115 3A2B         451           SET       TTYPE,TT_UNKN           ; (Rn) (Rn)+ -(Rn) X(Rn)
+    0116 A4A001DF     452           IF        5,0 = 37Q THEN GOTO JT_ABS     ; @#X
+    0119 A4A001F7     453           IF        5,0 = 67Q THEN GOTO JT_REL     ; X   (PC relative)
+    011C A4A301C1     454           IF        5,3 = 1 THEN RETURN            ; (Rn): no read
+    011F A46301C1     455           IF        3,3 = 1 THEN GOTO JT_RD        ; deferred modes 3 5 7
+    0122 0013         456           RETURN
+    0123              457 JT_ABS
+    0123 342B         458           SET       TTYPE,TT_OPWABS
+    0124 0013         459           RETURN
+    0125              460 JT_REL
+    0125 362B         461           SET       TTYPE,TT_OPWREL
+    0126 0013         462           RETURN
+    0127              463 JT_RD
+    0127 382B         464           SET       TTYPE,TT_READ           ; new PC = pointer read
+    0128 322C         465           SET       NSKIP,1
+    0129 0013         466           RETURN
+                      467 
+    012A              468 BR0
+    012A E148012B     469           CASE_OF   10,8
+    012C 0010         470           NOP
+    012D 60740242     471           OUTPUT    "BR"
+    012E 60760342     472           OUTPUT    "BNE"
+    012F 60780342     473           OUTPUT    "BEQ"
+    0130 607A0342     474           OUTPUT    "BGE"
+    0131 607C0342     475           OUTPUT    "BLT"
+    0132 607E0342     476           OUTPUT    "BGT"
+    0133 60800342     477           OUTPUT    "BLE"
+    012B 0008         478           CASE_END
+    0134 4257         479           GOTO      BRANCH
+                      480 
+    0135              481 SOP50
+    0135 E0E60136     482           CASE_OF   7,6
+    0137 60820343     483           OUTPUT    "CLR"
+    0138 60840343     484           OUTPUT    "COM"
+    0139 60860349     485           OUTPUT    "INC"
+    013A 60880344     486           OUTPUT    "DEC"
+    0136 0004         487           CASE_END
+    013B 4149         488           GOTO      SOPB
+    013C              489 SOP54
+    013C E0E6013D     490           CASE_OF   7,6
+    013E 608A034E     491           OUTPUT    "NEG"
+    013F 608C0341     492           OUTPUT    "ADC"
+    0140 608E0353     493           OUTPUT    "SBC"
+    0141 60900354     494           OUTPUT    "TST"
+    013D 0004         495           CASE_END
+    0142 4149         496           GOTO      SOPB
+    0143              497 SOP60
+    0143 E0E60144     498           CASE_OF   7,6
+    0145 60920352     499           OUTPUT    "ROR"
+    0146 60940352     500           OUTPUT    "ROL"
+    0147 60960341     501           OUTPUT    "ASR"
+    0148 60980341     502           OUTPUT    "ASL"
+    0144 0004         503           CASE_END
+    0149              504 SOPB
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   10
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    0149 101F         505           LOAD      OPC
+    014A A5EF01C1     506           IF        15,15 = 1 THEN OUTPUT "B"
+    014D 4249         507           GOTO      SOP
+    014E              508 SOP64
+    014E E0E6014F     509           CASE_OF   7,6
+    0150 415C         510           GOTO      MARK
+    0151 609B044D     511           OUTPUT    "MFPI"
+    0152 609E044D     512           OUTPUT    "MTPI"
+    0153 60A10353     513           OUTPUT    "SXT"
+    014F 0004         514           CASE_END
+    0154 4249         515           GOTO      SOP
+    0155              516 SOP70
+    0155 E0E60156     517           CASE_OF   7,6
+    0157 60A30343     518           OUTPUT    "CSM"
+    0158 427E         519           GOTO      ILLEGAL
+    0159 60A50654     520           OUTPUT    "TSTSET"
+    015A 60A90657     521           OUTPUT    "WRTLCK"
+    0156 0004         522           CASE_END
+    015B 4249         523           GOTO      SOP
+                      524 
+    015C              525 MARK
+    015C 60AD044D     526           OUTPUT    "MARK"
+    015D 3A2B         527           SET       TTYPE,TT_UNKN           ; PC = R5, then pop R5
+    015E 322C         528           SET       NSKIP,1
+    015F 5289         529           CALL      SCAN
+    0160 02C9         530           POSITION  ABS,9
+    0161 101F         531           LOAD      OPC
+    0162 7024         532           OUTPUT    ACCUMULATOR,O2
+    0163 0013         533           RETURN
+                      534 
+                      535 ************************************************************************
+                      536 *  Group 10xxxx
+                      537 ************************************************************************
+    0164              538 GRP10
+    0164 E1680165     539           CASE_OF   11,8
+    0166 4176         540           GOTO      BR10                    ; BPL
+    0167 4176         541           GOTO      BR10                    ; BMI
+    0168 4176         542           GOTO      BR10                    ; BHI
+    0169 4176         543           GOTO      BR10                    ; BLOS
+    016A 4176         544           GOTO      BR10                    ; BVC
+    016B 4176         545           GOTO      BR10                    ; BVS
+    016C 4176         546           GOTO      BR10                    ; BCC
+    016D 4176         547           GOTO      BR10                    ; BCS
+    016E 4181         548           GOTO      EMT                     ; 1040xx-1043xx
+    016F 4183         549           GOTO      TRAP                    ; 1044xx-1047xx
+    0170 4135         550           GOTO      SOP50                   ; CLRB COMB INCB DECB
+    0171 413C         551           GOTO      SOP54                   ; NEGB ADCB SBCB TSTB
+    0172 4143         552           GOTO      SOP60                   ; RORB ROLB ASRB ASLB
+    0173 418A         553           GOTO      SOPB64                  ; MTPS MFPD MTPD MFPS
+    0174 427E         554           GOTO      ILLEGAL
+    0175 427E         555           GOTO      ILLEGAL
+    0165 0010         556           CASE_END
+                      557 
+    0176              558 BR10
+    0176 E1480177     559           CASE_OF   10,8
+    0178 60B00342     560           OUTPUT    "BPL"
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   11
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    0179 60B20342     561           OUTPUT    "BMI"
+    017A 60B40342     562           OUTPUT    "BHI"
+    017B 60B60442     563           OUTPUT    "BLOS"
+    017C 60B90342     564           OUTPUT    "BVC"
+    017D 60BB0342     565           OUTPUT    "BVS"
+    017E 60BD0342     566           OUTPUT    "BCC"
+    017F 60BF0342     567           OUTPUT    "BCS"
+    0177 0008         568           CASE_END
+    0180 4257         569           GOTO      BRANCH
+                      570 
+    0181              571 EMT
+    0181 60C10345     572           OUTPUT    "EMT"
+    0182 4184         573           GOTO      EMTN
+    0183              574 TRAP
+    0183 60C30454     575           OUTPUT    "TRAP"
+    0184              576 EMTN
+    0184 3242         577           SET       VECOK,1
+    0185 5289         578           CALL      SCAN
+    0186 02C9         579           POSITION  ABS,9
+    0187 101F         580           LOAD      OPC
+    0188 7022         581           OUTPUT    ACCUMULATOR,O3
+    0189 0013         582           RETURN
+                      583 
+    018A              584 SOPB64
+    018A E0E6018B     585           CASE_OF   7,6
+    018C 60C6044D     586           OUTPUT    "MTPS"
+    018D 60C9044D     587           OUTPUT    "MFPD"
+    018E 60CC044D     588           OUTPUT    "MTPD"
+    018F 60CF044D     589           OUTPUT    "MFPS"
+    018B 0004         590           CASE_END
+    0190 4249         591           GOTO      SOP
+                      592 
+                      593 ************************************************************************
+                      594 *  Group 07xxxx  EIS, FIS, SOB
+                      595 ************************************************************************
+    0191              596 GRP7
+    0191 E1690192     597           CASE_OF   11,9
+    0193 419B         598           GOTO      EIS_MUL                 ; 070RSS
+    0194 419D         599           GOTO      EIS_DIV                 ; 071RSS
+    0195 419F         600           GOTO      EIS_ASH                 ; 072RSS
+    0196 41A1         601           GOTO      EIS_ASHC                ; 073RSS
+    0197 41AC         602           GOTO      EIS_XOR                 ; 074RDD
+    0198 41B7         603           GOTO      FIS                     ; 07500R-07503R
+    0199 427E         604           GOTO      ILLEGAL                 ; 076xxx (CIS)
+    019A 41C4         605           GOTO      SOB                     ; 077RNN
+    0192 0008         606           CASE_END
+                      607 
+    019B              608 EIS_MUL
+    019B 60D2034D     609           OUTPUT    "MUL"
+    019C 41A2         610           GOTO      EIS_SR
+    019D              611 EIS_DIV
+    019D 60D40344     612           OUTPUT    "DIV"
+    019E 41A2         613           GOTO      EIS_SR
+    019F              614 EIS_ASH
+    019F 60D60341     615           OUTPUT    "ASH"
+    01A0 41A2         616           GOTO      EIS_SR
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   12
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    01A1              617 EIS_ASHC
+    01A1 60D80441     618           OUTPUT    "ASHC"
+    01A2              619 EIS_SR
+    01A2 101F         620           LOAD      OPC
+    01A3 53F7         621           CALL      FWORDS
+    01A4 103A         622           LOAD      FW
+    01A5 0823         623           STORE     NOPW
+    01A6 5289         624           CALL      SCAN
+    01A7 02C9         625           POSITION  ABS,9
+    01A8 101F         626           LOAD      OPC
+    01A9 5417         627           CALL      EA
+    01AA 60DB012C     628           OUTPUT    ","
+    01AB 446D         629           GOTO      REG86
+                      630 
+    01AC              631 EIS_XOR
+    01AC 60DC0358     632           OUTPUT    "XOR"
+    01AD 101F         633           LOAD      OPC
+    01AE 53F7         634           CALL      FWORDS
+    01AF 103A         635           LOAD      FW
+    01B0 0823         636           STORE     NOPW
+    01B1 5289         637           CALL      SCAN
+    01B2 02C9         638           POSITION  ABS,9
+    01B3 546D         639           CALL      REG86
+    01B4 60DE012C     640           OUTPUT    ","
+    01B5 101F         641           LOAD      OPC
+    01B6 4417         642           GOTO      EA
+                      643 
+    01B7              644 FIS
+    01B7 B90501C0     645           IF        8,5 <> 0 THEN GOTO ILLEGAL
+    01BA E08301BB     646           CASE_OF   4,3
+    01BC 60DF0446     647           OUTPUT    "FADD"
+    01BD 60E20446     648           OUTPUT    "FSUB"
+    01BE 60E50446     649           OUTPUT    "FMUL"
+    01BF 60E80446     650           OUTPUT    "FDIV"
+    01BB 0004         651           CASE_END
+    01C0 5289         652           CALL      SCAN
+    01C1 02C9         653           POSITION  ABS,9
+    01C2 101F         654           LOAD      OPC
+    01C3 446F         655           GOTO      REG20
+                      656 
+    01C4              657 SOB
+    01C4 60EB0353     658           OUTPUT    "SOB"
+    01C5 1020         659           LOAD      PCA
+    01C6 13C2         660           ADD       2
+    01C7 083E         661           STORE     BASE
+    01C8 101F         662           LOAD      OPC
+    01C9 17FF         663           AND       77Q
+    01CA 083D         664           STORE     TMP
+    01CB 123D         665           ADD       TMP
+    01CC 0012         666           TWOS_COMPLEMENT
+    01CD 161C         667           AND       W16
+    01CE 526B         668           CALL      PCREL
+    01CF 082D         669           STORE     BRT
+    01D0 322B         670           SET       TTYPE,TT_BRANCH
+    01D1 5289         671           CALL      SCAN
+    01D2 02C9         672           POSITION  ABS,9
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   13
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    01D3 546D         673           CALL      REG86
+    01D4 60ED012C     674           OUTPUT    ","
+    01D5 102D         675           LOAD      BRT
+    01D6 4268         676           GOTO      ADDROUT
+                      677 
+                      678 ************************************************************************
+                      679 *  Group 17xxxx  FP11 floating point
+                      680 ************************************************************************
+    01D7              681 FPP
+    01D7 E16801D8     682           CASE_OF   11,8
+    01D9 4211         683           GOTO      FP0                     ; 1700xx-1703xx
+    01DA 422E         684           GOTO      FP1                     ; 1704xx-1707xx
+    01DB 60EE044D     685           OUTPUT    "MULF"
+    01DC 60F1044D     686           OUTPUT    "MODF"
+    01DD 60F40441     687           OUTPUT    "ADDF"
+    01DE 60F7034C     688           OUTPUT    "LDF"
+    01DF 60F90453     689           OUTPUT    "SUBF"
+    01E0 60FC0443     690           OUTPUT    "CMPF"
+    01E1 60FF0353     691           OUTPUT    "STF"
+    01E2 61010444     692           OUTPUT    "DIVF"
+    01E3 61040553     693           OUTPUT    "STEXP"
+    01E4 61070553     694           OUTPUT    "STCFI"
+    01E5 610A0553     695           OUTPUT    "STCFD"
+    01E6 610D054C     696           OUTPUT    "LDEXP"
+    01E7 6110054C     697           OUTPUT    "LDCIF"
+    01E8 6113054C     698           OUTPUT    "LDCDF"
+    01D8 0010         699           CASE_END
+    01E9 101F         700           LOAD      OPC
+    01EA 53F7         701           CALL      FWORDS
+    01EB 103A         702           LOAD      FW
+    01EC 0823         703           STORE     NOPW
+    01ED 5289         704           CALL      SCAN
+    01EE 02C9         705           POSITION  ABS,9
+    01EF 101F         706           LOAD      OPC
+    01F0 E16801F1     707           CASE_OF   11,8
+    01F2 0010         708           NOP
+    01F3 0010         709           NOP
+    01F4 4203         710           GOTO      FP_FSAC                 ; MULF  fsrc,AC
+    01F5 4203         711           GOTO      FP_FSAC                 ; MODF
+    01F6 4203         712           GOTO      FP_FSAC                 ; ADDF
+    01F7 4203         713           GOTO      FP_FSAC                 ; LDF
+    01F8 4203         714           GOTO      FP_FSAC                 ; SUBF
+    01F9 4203         715           GOTO      FP_FSAC                 ; CMPF
+    01FA 4209         716           GOTO      FP_ACFD                 ; STF   AC,fdst
+    01FB 4203         717           GOTO      FP_FSAC                 ; DIVF
+    01FC 420D         718           GOTO      FP_ACD                  ; STEXP AC,dst
+    01FD 420D         719           GOTO      FP_ACD                  ; STCFI AC,dst
+    01FE 4209         720           GOTO      FP_ACFD                 ; STCFD AC,fdst
+    01FF 4206         721           GOTO      FP_SAC                  ; LDEXP src,AC
+    0200 4206         722           GOTO      FP_SAC                  ; LDCIF src,AC
+    0201 4203         723           GOTO      FP_FSAC                 ; LDCDF fsrc,AC
+    01F1 0010         724           CASE_END
+    0202 0013         725           RETURN
+                      726 
+    0203              727 FP_FSAC
+    0203 5242         728           CALL      FEA
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   14
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    0204 6116012C     729           OUTPUT    ","
+    0205 423C         730           GOTO      FPAC
+    0206              731 FP_SAC
+    0206 5417         732           CALL      EA
+    0207 6117012C     733           OUTPUT    ","
+    0208 423C         734           GOTO      FPAC
+    0209              735 FP_ACFD
+    0209 523C         736           CALL      FPAC
+    020A 6118012C     737           OUTPUT    ","
+    020B 101F         738           LOAD      OPC
+    020C 4242         739           GOTO      FEA
+    020D              740 FP_ACD
+    020D 523C         741           CALL      FPAC
+    020E 6119012C     742           OUTPUT    ","
+    020F 101F         743           LOAD      OPC
+    0210 4417         744           GOTO      EA
+                      745 
+    0211              746 FP0
+    0211 E0E60212     747           CASE_OF   7,6
+    0213 4218         748           GOTO      FP00
+    0214 611A054C     749           OUTPUT    "LDFPS"
+    0215 611D0553     750           OUTPUT    "STFPS"
+    0216 61200453     751           OUTPUT    "STST"
+    0212 0004         752           CASE_END
+    0217 4249         753           GOTO      SOP
+                      754 
+    0218              755 FP00
+    0218 B8A401C0     756           IF        5,4 <> 0 THEN GOTO ILLEGAL
+    021B E060021C     757           CASE_OF   3,0
+    021D 61230443     758           OUTPUT    "CFCC"                  ; 170000
+    021E 61260453     759           OUTPUT    "SETF"                  ; 170001
+    021F 61290453     760           OUTPUT    "SETI"                  ; 170002
+    0220 427E         761           GOTO      ILLEGAL                 ; 170003
+    0221 427E         762           GOTO      ILLEGAL                 ; 170004
+    0222 427E         763           GOTO      ILLEGAL                 ; 170005
+    0223 427E         764           GOTO      ILLEGAL                 ; 170006
+    0224 427E         765           GOTO      ILLEGAL                 ; 170007
+    0225 427E         766           GOTO      ILLEGAL                 ; 170010
+    0226 612C0453     767           OUTPUT    "SETD"                  ; 170011
+    0227 612F0453     768           OUTPUT    "SETL"                  ; 170012
+    0228 427E         769           GOTO      ILLEGAL                 ; 170013
+    0229 427E         770           GOTO      ILLEGAL                 ; 170014
+    022A 427E         771           GOTO      ILLEGAL                 ; 170015
+    022B 427E         772           GOTO      ILLEGAL                 ; 170016
+    022C 427E         773           GOTO      ILLEGAL                 ; 170017
+    021C 0010         774           CASE_END
+    022D 4255         775           GOTO      NOOPND
+                      776 
+    022E              777 FP1
+    022E E0E6022F     778           CASE_OF   7,6
+    0230 61320443     779           OUTPUT    "CLRF"
+    0231 61350454     780           OUTPUT    "TSTF"
+    0232 61380441     781           OUTPUT    "ABSF"
+    0233 613B044E     782           OUTPUT    "NEGF"
+    022F 0004         783           CASE_END
+    0234 101F         784           LOAD      OPC
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   15
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    0235 53F7         785           CALL      FWORDS
+    0236 103A         786           LOAD      FW
+    0237 0823         787           STORE     NOPW
+    0238 5289         788           CALL      SCAN
+    0239 02C9         789           POSITION  ABS,9
+    023A 101F         790           LOAD      OPC
+    023B 4242         791           GOTO      FEA
+                      792 
+                      793 *
+                      794 *  FPAC - floating accumulator in bits 7-6
+                      795 *
+    023C              796 FPAC
+    023C 101F         797           LOAD      OPC
+    023D 0246         798           ROTATE    RIGHT,6
+    023E 17C3         799           AND       3
+    023F 613E0241     800           OUTPUT    "AC"
+    0240 7026         801           OUTPUT    ACCUMULATOR,O1
+    0241 0013         802           RETURN
+                      803 
+                      804 *
+                      805 *  FEA - floating point operand: mode 0 is a floating accumulator
+                      806 *
+    0242              807 FEA
+    0242 B8A301C0     808           IF        5,3 <> 0 THEN GOTO EA
+    0245 17C7         809           AND       7
+    0246 61400241     810           OUTPUT    "AC"
+    0247 7026         811           OUTPUT    ACCUMULATOR,O1
+    0248 0013         812           RETURN
+                      813 
+                      814 ************************************************************************
+                      815 *  Common tails
+                      816 ************************************************************************
+                      817 *
+                      818 *  SOP - single operand in bits 5-0 (mnemonic already output)
+                      819 *
+    0249              820 SOP
+    0249 101F         821           LOAD      OPC
+    024A 53F7         822           CALL      FWORDS
+    024B 103A         823           LOAD      FW
+    024C 0823         824           STORE     NOPW
+    024D 101F         825           LOAD      OPC
+    024E A4A001C7     826           IF        5,0 = 7 THEN SET TTYPE,TT_UNKN ; e.g. CLR PC
+    0251 5289         827           CALL      SCAN
+    0252 02C9         828           POSITION  ABS,9
+    0253 101F         829           LOAD      OPC
+    0254 4417         830           GOTO      EA
+                      831 
+                      832 *
+                      833 *  NOOPND - no operands
+                      834 *
+    0255              835 NOOPND
+    0255 5289         836           CALL      SCAN
+    0256 0013         837           RETURN
+                      838 
+                      839 *
+                      840 *  BRANCH - 8 bit word offset in OPC (mnemonic already output)
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   16
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+                      841 *
+    0257              842 BRANCH
+    0257 1020         843           LOAD      PCA
+    0258 13C2         844           ADD       2
+    0259 083E         845           STORE     BASE
+    025A 101F         846           LOAD      OPC
+    008C 00FF0000     847           AND       377Q
+    025C A4E701C1     848           IF        7,7 = 1 THEN INCLUSIVE_OR 0FFFFFF00H
+    025F 083D         849           STORE     TMP
+    0260 123D         850           ADD       TMP
+    0261 161C         851           AND       W16
+    0262 526B         852           CALL      PCREL
+    0263 082D         853           STORE     BRT
+    0264 322B         854           SET       TTYPE,TT_BRANCH
+    0265 5289         855           CALL      SCAN
+    0266 02C9         856           POSITION  ABS,9
+    0267 102D         857           LOAD      BRT
+    0268              858 ADDROUT
+    0268 00177020     859           IF_NOT_MAPPED THEN OUTPUT ACCUMULATOR,P6
+    026A 0013         860           RETURN
+                      861 
+                      862 *
+                      863 *  PCREL - accumulator = BASE + 16 bit displacement in the accumulator.
+                      864 *
+                      865 *  Below the I/O page the sum is a (sign extended) bus address.  Code
+                      866 *  running in the I/O page (e.g. boot ROMs) uses 16 bit virtual addresses
+                      867 *  that map 160000-177777 to 760000-777777.
+                      868 *
+    026B              869 PCREL
+    026B 161C         870           AND       W16
+    026C A5EF01C1     871           IF        15,15 = 1 THEN INCLUSIVE_OR 0FFFF0000H
+    026F 123E         872           ADD       BASE
+    0270 083D         873           STORE     TMP
+    0271 103E         874           LOAD      BASE
+    0272 A62D01DF     875           IF        17,13 = 37Q THEN GOTO PCR_IO
+    0275 103D         876           LOAD      TMP
+    0276 161B         877           AND       A18
+    0277 0013         878           RETURN
+    0278              879 PCR_IO
+    0278 103D         880           LOAD      TMP
+    0279 161C         881           AND       W16
+    027A A5ED01C7     882           IF        15,13 = 7 THEN INCLUSIVE_OR 600000Q
+    027D 0013         883           RETURN
+                      884 
+                      885 *
+                      886 *  ILLEGAL - not an instruction on any Unibus PDP-11
+                      887 *
+    027E              888 ILLEGAL
+    027E 6142052E     889           OUTPUT    ".WORD"
+    027F 3023         890           SET       NOPW,0
+    0280 302B         891           SET       TTYPE,TT_SEQ
+    0281 5289         892           CALL      SCAN
+    0282 843F01C0     893           IF        CONF = 0 THEN SET FOUNDF,0
+    0285 02C9         894           POSITION  ABS,9
+    0286 101F         895           LOAD      OPC
+    0287 701E         896           OUTPUT    ACCUMULATOR,O6
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   17
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    0288 0013         897           RETURN
+                      898 
+                      899 ************************************************************************
+                      900 *
+                      901 *  SCAN - look ahead in the trace for the extension words and the next
+                      902 *  instruction fetch, and tag every state up to that fetch.
+                      903 *
+                      904 ************************************************************************
+    0289              905 SCAN
+    0289 3040         906           SET       FOUNDF,0
+    028A 3033         907           SET       NS,0
+    028B 11E0         908           LOAD      SCANMAX
+    028C 843F01C0     909           IF        CONF = 0 THEN LOAD GUESSMAX
+    028F 0841         910           STORE     SCLIM
+    0290 3032         911           SET       DREADS,0
+    0291 3024         912           SET       OPWN,0
+    0292 11BF         913           LOAD      NOMATCH
+    0293 082F         914           STORE     CAND2
+    0294 0837         915           STORE     VEC2A
+    0295 0843         916           STORE     INTRV
+    0296 101B         917           LOAD      A18
+    0297 0830         918           STORE     CMPMASK
+    0298 1020         919           LOAD      PCA
+    0299 13C2         920           ADD       2
+    029A 161B         921           AND       A18
+    029B 0827         922           STORE     NXOPW
+    029C 1023         923           LOAD      NOPW                    ; sequential next fetch
+    029D 1223         924           ADD       NOPW
+    029E 1227         925           ADD       NXOPW
+    029F 161B         926           AND       A18
+    02A0 082E         927           STORE     CAND1
+    02A1 3231         928           SET       CANDOK,1
+    02A2 842B01C0     929           IF        TTYPE = TT_SEQ THEN GOTO SC_LOOP
+    02A5 102D         930           LOAD      BRT
+    02A6 082F         931           STORE     CAND2
+    02A7 842B01C1     932           IF        TTYPE = TT_BRANCH THEN GOTO SC_LOOP
+    02AA 11BF         933           LOAD      NOMATCH                 ; target not known yet
+    02AB 082E         934           STORE     CAND1
+    02AC 082F         935           STORE     CAND2
+    02AD 3031         936           SET       CANDOK,0
+                      937 
+    02AE              938 SC_LOOP
+    02AE 0A33         939           INCREMENT NS
+    02AF 88330041     940           IF        NS > SCLIM THEN RETURN
+    02B2 0433         941           INPUT     REL,NS
+    02B3 980B01C0     942           IF        INPUT_ERROR <> 0 THEN SET FOUNDF,2
+    02B6 980B01C0     943           IF        INPUT_ERROR <> 0 THEN RETURN
+    02B9 100D         944           LOAD      INPUT_DATA
+    02BA 161C         945           AND       W16
+    02BB 0836         946           STORE     CURDATA
+    02BC 100C         947           LOAD      INPUT_ADDRESS
+    02BD 161B         948           AND       A18
+    02BE 0835         949           STORE     CURADDR
+    02BF 100E         950           LOAD      INPUT_STATUS
+    02C0 A44201C1     951           IF        2,2 = 1 THEN GOTO SC_INTR      ; INTR transfer
+    02C3 A42101C1     952           IF        1,1 = 1 THEN GOTO SC_DATA      ; DATO / DATOB
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   18
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    02C6 8C240023     953           IF        OPWN >= NOPW THEN GOTO SC_FETCH
+    02C9 1035         954           LOAD      CURADDR
+    02CA BBE00027     955           IF        31,0 <> NXOPW THEN GOTO SC_DREAD
+                      956 *
+                      957 *  Extension word
+                      958 *
+    02CD 1036         959           LOAD      CURDATA
+    02CE 842401C0     960           IF        OPWN = 0 THEN STORE OPW1
+    02D1 842401C1     961           IF        OPWN = 1 THEN STORE OPW2
+    02D4 0A24         962           INCREMENT OPWN
+    02D5 1027         963           LOAD      NXOPW
+    02D6 13C2         964           ADD       2
+    02D7 161B         965           AND       A18
+    02D8 0827         966           STORE     NXOPW
+    02D9 3439         967           SET       TAGV,TG_OPER
+    02DA 5352         968           CALL      SC_TAG
+    02DB 90240023     969           IF        OPWN < NOPW THEN GOTO SC_LOOP
+    02DE 842B01C2     970           IF        TTYPE = TT_OPWABS THEN GOTO SC_OABS
+    02E1 982B01C3     971           IF        TTYPE <> TT_OPWREL THEN GOTO SC_LOOP
+    02E4 1035         972           LOAD      CURADDR                 ; X(PC): X + address + 2
+    02E5 13C2         973           ADD       2
+    02E6 083E         974           STORE     BASE
+    02E7 1036         975           LOAD      CURDATA
+    02E8 526B         976           CALL      PCREL
+    02E9 082E         977           STORE     CAND1
+    02EA 3231         978           SET       CANDOK,1
+    02EB 42AE         979           GOTO      SC_LOOP
+    02EC              980 SC_OABS
+    02EC 1036         981           LOAD      CURDATA                 ; @#X or #X: virtual address
+    02ED 082E         982           STORE     CAND1
+    02EE 101D         983           LOAD      PG13
+    02EF 0830         984           STORE     CMPMASK
+    02F0 3231         985           SET       CANDOK,1
+    02F1 42AE         986           GOTO      SC_LOOP
+                      987 *
+                      988 *  A read after all extension words: is it the next fetch?
+                      989 *
+    02F2              990 SC_FETCH
+    02F2 843101C0     991           IF        CANDOK = 0 THEN GOTO SC_DREAD
+    02F5 1035         992           LOAD      CURADDR
+    02F6 1A2E         993           EXCLUSIVE_OR CAND1
+    02F7 1630         994           AND       CMPMASK
+    02F8 A7E001C0     995           IF        31,0 = 0 THEN GOTO SC_FOUND
+    02FB 1035         996           LOAD      CURADDR
+    02FC 1A2F         997           EXCLUSIVE_OR CAND2
+    02FD 1630         998           AND       CMPMASK
+    02FE A7E001C0     999           IF        31,0 = 0 THEN GOTO SC_FOUND
+                     1000 *
+                     1001 *  Some other read: vector fetch or data read
+                     1002 *
+    0301             1003 SC_DREAD
+    0301 1035        1004           LOAD      CURADDR
+    0302 A7E00037    1005           IF        31,0 = VEC2A THEN GOTO SC_VEC
+    0305 844201C0    1006           IF        VECOK = 0 THEN GOTO SC_DR2
+    0308 AFE0001A    1007           IF        31,0 >= VEC_LIMIT THEN GOTO SC_DR2
+    030B A40001C1    1008           IF        0,0 = 1 THEN GOTO SC_DR2
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   19
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    030E 53B0        1009           CALL      SC_PEEK                 ; vector pair V, V+2 ...
+    030F 843801C0    1010           IF        FOUNDV = 0 THEN GOTO SC_DR2
+    0312 1035        1011           LOAD      CURADDR
+    0313 A7E00043    1012           IF        31,0 = INTRV THEN GOTO SC_ISVEC  ; ... announced by INTR
+    0316 53D0        1013           CALL      SC_PUSH                 ; ... or next to two pushes
+    0317 843801C0    1014           IF        FOUNDV = 0 THEN GOTO SC_DR2
+    031A             1015 SC_ISVEC
+    031A 1036        1016           LOAD      CURDATA                 ; new PC from the vector
+    031B 082E        1017           STORE     CAND1
+    031C 11BF        1018           LOAD      NOMATCH
+    031D 082F        1019           STORE     CAND2
+    031E 101D        1020           LOAD      PG13
+    031F 0830        1021           STORE     CMPMASK
+    0320 3231        1022           SET       CANDOK,1
+    0321 342B        1023           SET       TTYPE,TT_OPWABS
+    0322 1024        1024           LOAD      OPWN                    ; no more extension words
+    0323 0823        1025           STORE     NOPW
+    0324 1035        1026           LOAD      CURADDR
+    0325 13C2        1027           ADD       2
+    0326 0837        1028           STORE     VEC2A
+    0327             1029 SC_VEC
+    0327 3839        1030           SET       TAGV,TG_VEC
+    0328 5352        1031           CALL      SC_TAG
+    0329 42AE        1032           GOTO      SC_LOOP
+    032A             1033 SC_DR2
+    032A 90240023    1034           IF        OPWN < NOPW THEN GOTO SC_DR3
+    032D 982B01C5    1035           IF        TTYPE <> TT_UNKN THEN GOTO SC_DR3
+    0330 1032        1036           LOAD      DREADS
+    0331 B3E0002C    1037           IF        31,0 < NSKIP THEN GOTO SC_DR3
+    0334 536B        1038           CALL      SC_NEAR                 ; a fetch at X is followed
+    0335 843801C1    1039           IF        FOUNDV = 1 THEN GOTO SC_FOUND  ; by a read of X+2
+    0338 1036        1040           LOAD      CURDATA                 ; ... unless it transfers
+    0339 5389        1041           CALL      CTLXFER                 ; control
+    033A 843801C1    1042           IF        FOUNDV = 1 THEN GOTO SC_FOUND
+    033D             1043 SC_DR3
+    033D 0A32        1044           INCREMENT DREADS
+    033E 982B01C4    1045           IF        TTYPE <> TT_READ THEN GOTO SC_DATA
+    0341 9832002C    1046           IF        DREADS <> NSKIP THEN GOTO SC_DATA
+    0344 1036        1047           LOAD      CURDATA                 ; this read fetched the new PC
+    0345 082E        1048           STORE     CAND1
+    0346 101D        1049           LOAD      PG13
+    0347 0830        1050           STORE     CMPMASK
+    0348 3231        1051           SET       CANDOK,1
+    0349             1052 SC_INTR
+    0349 1036        1053           LOAD      CURDATA                 ; device vector on the data lines
+    034A 0843        1054           STORE     INTRV
+    034B             1055 SC_DATA
+    034B 3639        1056           SET       TAGV,TG_DATA
+    034C 5352        1057           CALL      SC_TAG
+    034D 42AE        1058           GOTO      SC_LOOP
+    034E             1059 SC_FOUND
+    034E 3239        1060           SET       TAGV,TG_FETCH
+    034F 5352        1061           CALL      SC_TAG
+    0350 3240        1062           SET       FOUNDF,1
+    0351 0013        1063           RETURN
+                     1064 
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   20
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    0352             1065 SC_TAG
+    0352 0433        1066           INPUT     REL,NS
+    0353 1C39        1067           TAG_WITH  TAGV
+    0354 0013        1068           RETURN
+                     1069 
+                     1070 *
+                     1071 *  SC_CLR - remove the tags the last SCAN wrote (but keep the extension
+                     1072 *           words of an instruction that is known to be one)
+                     1073 *
+    0355             1074 SC_CLR
+    0355 3034        1075           SET       MS,0
+    0356             1076 SCC_LOOP
+    0356 0A34        1077           INCREMENT MS
+    0357 88340033    1078           IF        MS > NS THEN RETURN
+    035A 883401E0    1079           IF        MS > SCANMAX THEN RETURN
+    035D 0434        1080           INPUT     REL,MS
+    035E 980B01C0    1081           IF        INPUT_ERROR <> 0 THEN RETURN
+    0361 843F01C0    1082           IF        CONF = 0 THEN GOTO SCC_ZAP
+    0364 100F        1083           LOAD      INPUT_TAG
+    0365 161E        1084           AND       UTAGMASK
+    0366 A7E001C2    1085           IF        31,0 = TG_OPER THEN GOTO SCC_LOOP
+    0369             1086 SCC_ZAP
+    0369 1DC0        1087           TAG_WITH  0
+    036A 4356        1088           GOTO      SCC_LOOP
+                     1089 
+                     1090 *
+                     1091 *  SC_NEAR - is there a read of CURADDR+2 soon after state NS ?
+                     1092 *
+    036B             1093 SC_NEAR
+    036B 3038        1094           SET       FOUNDV,0
+    036C 1033        1095           LOAD      NS
+    036D 0834        1096           STORE     MS
+    036E 1035        1097           LOAD      CURADDR
+    036F 13C2        1098           ADD       2
+    0370 083D        1099           STORE     TMP
+    0371             1100 SN_LOOP
+    0371 0A34        1101           INCREMENT MS
+    0372 1034        1102           LOAD      MS
+    0373 1433        1103           SUBTRACT  NS
+    0374 ABE001C8    1104           IF        31,0 > 8 THEN RETURN
+    0377 0434        1105           INPUT     REL,MS
+    0378 980B01C0    1106           IF        INPUT_ERROR <> 0 THEN RETURN
+    037B 100E        1107           LOAD      INPUT_STATUS
+    037C A44201C1    1108           IF        2,2 = 1 THEN GOTO SN_LOOP
+    037F A42101C1    1109           IF        1,1 = 1 THEN GOTO SN_LOOP
+    0382 100C        1110           LOAD      INPUT_ADDRESS
+    0383 161B        1111           AND       A18
+    0384 BBE0003D    1112           IF        31,0 <> TMP THEN GOTO SN_LOOP
+    0387 3238        1113           SET       FOUNDV,1
+    0388 0013        1114           RETURN
+                     1115 
+                     1116 *
+                     1117 *  CTLXFER - FOUNDV = 1 if the opcode in the accumulator is a trap,
+                     1118 *            branch, JMP, JSR, RTS, RTI or RTT
+                     1119 *
+    0389             1120 CTLXFER
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   21
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    0389 3238        1121           SET       FOUNDV,1
+    038A A5E80088    1122           IF        15,8 = 210Q THEN RETURN        ; EMT
+    038D A5E80089    1123           IF        15,8 = 211Q THEN RETURN        ; TRAP
+    0390 A5EB01D0    1124           IF        15,11 = 20Q THEN RETURN        ; BPL ... BCS
+    0393 A5E901C4    1125           IF        15,9 = 4 THEN RETURN           ; JSR
+    0396 B9EB01C0    1126           IF        15,11 <> 0 THEN GOTO CTX_NO
+    0399 B94801C0    1127           IF        10,8 <> 0 THEN RETURN          ; BR ... BLE
+    039C A4E601C1    1128           IF        7,6 = 1 THEN RETURN            ; JMP
+    039F A4E301D0    1129           IF        7,3 = 20Q THEN RETURN          ; RTS
+    03A2 A4E001C2    1130           IF        7,0 = 2 THEN RETURN            ; RTI
+    03A5 A4E001C3    1131           IF        7,0 = 3 THEN RETURN            ; BPT
+    03A8 A4E001C4    1132           IF        7,0 = 4 THEN RETURN            ; IOT
+    03AB A4E001C6    1133           IF        7,0 = 6 THEN RETURN            ; RTT
+    03AE             1134 CTX_NO
+    03AE 3038        1135           SET       FOUNDV,0
+    03AF 0013        1136           RETURN
+                     1137 
+                     1138 *
+                     1139 *  SC_PEEK - is the next read after state NS at address CURADDR+2 ?
+                     1140 *
+    03B0             1141 SC_PEEK
+    03B0 3038        1142           SET       FOUNDV,0
+    03B1 1033        1143           LOAD      NS
+    03B2 0834        1144           STORE     MS
+    03B3 1035        1145           LOAD      CURADDR
+    03B4 13C2        1146           ADD       2
+    03B5 083D        1147           STORE     TMP
+    03B6             1148 SP_LOOP
+    03B6 0A34        1149           INCREMENT MS
+    03B7 1034        1150           LOAD      MS
+    03B8 1433        1151           SUBTRACT  NS
+    03B9 ABE001C4    1152           IF        31,0 > 4 THEN RETURN
+    03BC 0434        1153           INPUT     REL,MS
+    03BD 980B01C0    1154           IF        INPUT_ERROR <> 0 THEN RETURN
+    03C0 100E        1155           LOAD      INPUT_STATUS
+    03C1 A44201C1    1156           IF        2,2 = 1 THEN GOTO SP_LOOP
+    03C4 A42101C1    1157           IF        1,1 = 1 THEN GOTO SP_LOOP
+    03C7 100C        1158           LOAD      INPUT_ADDRESS
+    03C8 161B        1159           AND       A18
+    03C9 BBE0003D    1160           IF        31,0 <> TMP THEN RETURN
+    03CC 1034        1161           LOAD      MS
+    03CD 0844        1162           STORE     VP2
+    03CE 3238        1163           SET       FOUNDV,1
+    03CF 0013        1164           RETURN
+                     1165 
+                     1166 *
+                     1167 *  SC_PUSH - an interrupt or trap pushes PS and PC just before or just
+                     1168 *            after reading the vector: look for two word writes to
+                     1169 *            descending addresses around the vector pair (NS .. VP2).
+                     1170 *
+    03D0             1171 SC_PUSH
+    03D0 3038        1172           SET       FOUNDV,0
+    03D1 11BF        1173           LOAD      NOMATCH
+    03D2 0845        1174           STORE     LASTW
+    03D3 1033        1175           LOAD      NS
+    03D4 15C3        1176           SUBTRACT  3
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   22
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    03D5 0834        1177           STORE     MS
+    03D6 A7FF01C1    1178           IF        31,31 = 1 THEN SET MS,0        ; not before the
+    03D9 843401C0    1179           IF        MS = 0 THEN SET MS,1           ; instruction itself
+    03DC 1044        1180           LOAD      VP2
+    03DD 13C3        1181           ADD       3
+    03DE 083D        1182           STORE     TMP
+    03DF             1183 SPU_LOOP
+    03DF 8834003D    1184           IF        MS > TMP THEN RETURN
+    03E2 0434        1185           INPUT     REL,MS
+    03E3 0A34        1186           INCREMENT MS
+    03E4 980B01C0    1187           IF        INPUT_ERROR <> 0 THEN RETURN
+    03E7 100E        1188           LOAD      INPUT_STATUS
+    03E8 B84001C2    1189           IF        2,0 <> 2 THEN GOTO SPU_LOOP    ; DATO only
+    03EB 1045        1190           LOAD      LASTW
+    03EC 15C2        1191           SUBTRACT  2
+    03ED 0845        1192           STORE     LASTW
+    03EE 100C        1193           LOAD      INPUT_ADDRESS
+    03EF 161B        1194           AND       A18
+    03F0 A7E00045    1195           IF        31,0 = LASTW THEN GOTO SPU_YES
+    03F3 0845        1196           STORE     LASTW
+    03F4 43DF        1197           GOTO      SPU_LOOP
+    03F5             1198 SPU_YES
+    03F5 3238        1199           SET       FOUNDV,1
+    03F6 0013        1200           RETURN
+                     1201 
+                     1202 ************************************************************************
+                     1203 *
+                     1204 *  OPERAND OUTPUT
+                     1205 *
+                     1206 ************************************************************************
+                     1207 *
+                     1208 *  FWORDS - FW = extension words needed by the operand in bits 5-0
+                     1209 *
+    03F7             1210 FWORDS
+    03F7 303A        1211           SET       FW,0
+    03F8 A4A401C3    1212           IF        5,4 = 3 THEN GOTO FW_1         ; modes 6 7
+    03FB B8A401C1    1213           IF        5,4 <> 1 THEN RETURN           ; modes 0 1 4 5
+    03FE B84001C7    1214           IF        2,0 <> 7 THEN RETURN           ; modes 2 3, not PC
+    0401             1215 FW_1
+    0401 323A        1216           SET       FW,1
+    0402 0013        1217           RETURN
+                     1218 
+                     1219 *
+                     1220 *  SRDS - NSKIP = data reads made to fetch the source in bits 5-0
+                     1221 *
+    0403             1222 SRDS
+    0403 083D        1223           STORE     TMP
+    0404 E0A30405    1224           CASE_OF   5,3
+    0406 302C        1225           SET       NSKIP,0
+    0407 322C        1226           SET       NSKIP,1
+    0408 322C        1227           SET       NSKIP,1
+    0409 342C        1228           SET       NSKIP,2
+    040A 322C        1229           SET       NSKIP,1
+    040B 342C        1230           SET       NSKIP,2
+    040C 322C        1231           SET       NSKIP,1
+    040D 342C        1232           SET       NSKIP,2
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   23
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    0405 0008        1233           CASE_END
+    040E 103D        1234           LOAD      TMP
+    040F B84001C7    1235           IF        2,0 <> 7 THEN RETURN
+    0412 B8A401C1    1236           IF        5,4 <> 1 THEN RETURN
+    0415 0C2C        1237           DECREMENT NSKIP                   ; #X and @#X
+    0416 0013        1238           RETURN
+                     1239 
+                     1240 *
+                     1241 *  EA - output the operand in bits 5-0 of the accumulator
+                     1242 *
+    0417             1243 EA
+    0417 17FF        1244           AND       77Q
+    0418 083B        1245           STORE     EAF
+    0419 17C7        1246           AND       7
+    041A 083C        1247           STORE     EAREG
+    041B 103B        1248           LOAD      EAF
+    041C E0A3041D    1249           CASE_OF   5,3
+    041E 4471        1250           GOTO      REGNAME                 ; Rn
+    041F 4426        1251           GOTO      EA_DEF                  ; (Rn)
+    0420 442B        1252           GOTO      EA_AINC                 ; (Rn)+
+    0421 442A        1253           GOTO      EA_AINCD                ; @(Rn)+
+    0422 443A        1254           GOTO      EA_ADEC                 ; -(Rn)
+    0423 4439        1255           GOTO      EA_ADECD                ; @-(Rn)
+    0424 443F        1256           GOTO      EA_IDX                  ; X(Rn)
+    0425 443E        1257           GOTO      EA_IDXD                 ; @X(Rn)
+    041D 0008        1258           CASE_END
+    0426             1259 EA_DEF
+    0426 61450128    1260           OUTPUT    "("
+    0427 5471        1261           CALL      REGNAME
+    0428 61460129    1262           OUTPUT    ")"
+    0429 0013        1263           RETURN
+    042A             1264 EA_AINCD
+    042A 61470140    1265           OUTPUT    "@"
+    042B             1266 EA_AINC
+    042B 843C01C7    1267           IF        EAREG = 7 THEN GOTO EA_IMM
+    042E 61480128    1268           OUTPUT    "("
+    042F 5471        1269           CALL      REGNAME
+    0430 61490229    1270           OUTPUT    ")+"
+    0431 0013        1271           RETURN
+    0432             1272 EA_IMM
+    0432 614B0123    1273           OUTPUT    "#"
+    0433 5459        1274           CALL      NEXTOPW
+    0434 842A01C1    1275           IF        OPWMISS = 1 THEN GOTO STARS
+    0437 701E        1276           OUTPUT    ACCUMULATOR,O6
+    0438 0013        1277           RETURN
+    0439             1278 EA_ADECD
+    0439 614C0140    1279           OUTPUT    "@"
+    043A             1280 EA_ADEC
+    043A 614D022D    1281           OUTPUT    "-("
+    043B 5471        1282           CALL      REGNAME
+    043C 614F0129    1283           OUTPUT    ")"
+    043D 0013        1284           RETURN
+    043E             1285 EA_IDXD
+    043E 61500140    1286           OUTPUT    "@"
+    043F             1287 EA_IDX
+    043F 5459        1288           CALL      NEXTOPW
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   24
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    0440 842A01C1    1289           IF        OPWMISS = 1 THEN GOTO EA_IDXM
+    0443 843C01C7    1290           IF        EAREG = 7 THEN GOTO EA_REL
+    0446 701E        1291           OUTPUT    ACCUMULATOR,O6
+    0447 444C        1292           GOTO      EA_IDXR
+    0448             1293 EA_IDXM
+    0448 6151062A    1294           OUTPUT    "******"
+    0449 843C01C7    1295           IF        EAREG = 7 THEN RETURN
+    044C             1296 EA_IDXR
+    044C 61550128    1297           OUTPUT    "("
+    044D 5471        1298           CALL      REGNAME
+    044E 61560129    1299           OUTPUT    ")"
+    044F 0013        1300           RETURN
+    0450             1301 EA_REL
+    0450 083D        1302           STORE     TMP                     ; X + address of X + 2
+    0451 1029        1303           LOAD      OPWA
+    0452 13C2        1304           ADD       2
+    0453 083E        1305           STORE     BASE
+    0454 103D        1306           LOAD      TMP
+    0455 526B        1307           CALL      PCREL
+    0456 4268        1308           GOTO      ADDROUT
+    0457             1309 STARS
+    0457 6157062A    1310           OUTPUT    "******"
+    0458 0013        1311           RETURN
+                     1312 
+                     1313 *
+                     1314 *  NEXTOPW - accumulator = next extension word, OPWA = its address,
+                     1315 *            OPWMISS = 1 if it was not found in the trace
+                     1316 *
+    0459             1317 NEXTOPW
+    0459 302A        1318           SET       OPWMISS,0
+    045A 1028        1319           LOAD      OPWI
+    045B 1228        1320           ADD       OPWI
+    045C 1220        1321           ADD       PCA
+    045D 13C2        1322           ADD       2
+    045E 161B        1323           AND       A18
+    045F 0829        1324           STORE     OPWA
+    0460 0A28        1325           INCREMENT OPWI
+    0461 88280024    1326           IF        OPWI > OPWN THEN GOTO NXO_MISS
+    0464 842801C2    1327           IF        OPWI = 2 THEN GOTO NXO_2
+    0467 1025        1328           LOAD      OPW1
+    0468 0013        1329           RETURN
+    0469             1330 NXO_2
+    0469 1026        1331           LOAD      OPW2
+    046A 0013        1332           RETURN
+    046B             1333 NXO_MISS
+    046B 322A        1334           SET       OPWMISS,1
+    046C 0013        1335           RETURN
+                     1336 
+                     1337 *
+                     1338 *  Register names
+                     1339 *
+    046D             1340 REG86
+    046D 101F        1341           LOAD      OPC
+    046E 0246        1342           ROTATE    RIGHT,6
+    046F             1343 REG20
+    046F 17C7        1344           AND       7
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   25
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    0470 083C        1345           STORE     EAREG
+    0471             1346 REGNAME
+    0471 103C        1347           LOAD      EAREG
+    0472 E0400473    1348           CASE_OF   2,0
+    0474 615B0252    1349           OUTPUT    "R0"
+    0475 615D0252    1350           OUTPUT    "R1"
+    0476 615F0252    1351           OUTPUT    "R2"
+    0477 61610252    1352           OUTPUT    "R3"
+    0478 61630252    1353           OUTPUT    "R4"
+    0479 61650252    1354           OUTPUT    "R5"
+    047A 61670253    1355           OUTPUT    "SP"
+    047B 61690250    1356           OUTPUT    "PC"
+    0473 0008        1357           CASE_END
+    047C 0013        1358           RETURN
+                     1359 
+                     1360 ************************************************************************
+                     1361 *
+                     1362 *  SHOWCYC - display a state that is not an instruction fetch
+                     1363 *
+                     1364 *            data  cycle  [operand | vector]
+                     1365 *
+                     1366 ************************************************************************
+    047D             1367 SHOWCYC
+    047D 3007        1368           SET       RETURN_FLAGS,0
+    047E 02C3        1369           POSITION  ABS,3
+    047F 1021        1370           LOAD      CURSTAT
+    0480 A44201C1    1371           IF        2,2 = 1 THEN GOTO SHOW_W
+    0483 B82001C3    1372           IF        1,0 <> 3 THEN GOTO SHOW_W
+    0486 1020        1373           LOAD      PCA                     ; DATOB: show only the byte
+    0487 A40001C1    1374           IF        0,0 = 1 THEN GOTO SHOW_HB
+    048A 101F        1375           LOAD      OPC
+    048B 448E        1376           GOTO      SHOW_B
+    048C             1377 SHOW_HB
+    048C 101F        1378           LOAD      OPC
+    048D 0248        1379           ROTATE    RIGHT,8
+    048E             1380 SHOW_B
+    048E 0323        1381           POSITION  REL,3
+    048F 7022        1382           OUTPUT    ACCUMULATOR,O3
+    0490 4493        1383           GOTO      SHOW_CT
+    0491             1384 SHOW_W
+    0491 101F        1385           LOAD      OPC
+    0492 701E        1386           OUTPUT    ACCUMULATOR,O6
+    0493             1387 SHOW_CT
+    0493 0322        1388           POSITION  REL,2
+    0494 1021        1389           LOAD      CURSTAT
+    0495 A44201C1    1390           IF        2,2 = 1 THEN GOTO SHOW_INT
+    0498 E0200499    1391           CASE_OF   1,0
+    049A 616B0544    1392           OUTPUT    "DATI "
+    049B 616E0544    1393           OUTPUT    "DATIP"
+    049C 61710544    1394           OUTPUT    "DATO "
+    049D 61740544    1395           OUTPUT    "DATOB"
+    0499 0004        1396           CASE_END
+    049E 44A0        1397           GOTO      SHOW_TG
+    049F             1398 SHOW_INT
+    049F 61770549    1399           OUTPUT    "INTR "
+    04A0             1400 SHOW_TG
+HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   26
+FILE: C:\IPDP11.S
+LOCATION OBJECT CODE LINE     SOURCE LINE
+
+    04A0 0322        1401           POSITION  REL,2
+    04A1 842201C2    1402           IF        TAGCUR = TG_OPER THEN OUTPUT "operand"
+    04A4 842201C4    1403           IF        TAGCUR = TG_VEC THEN OUTPUT "vector"
+    04A7 0013        1404           RETURN
+
+Errors=    0
+CROSS REFERENCE TABLE           Sat Oct 10 21:22:54 2026                   PAGE    27
+FILE: C:\IPDP11.S 
+LINE#   SYMBOL        TYPE     REFERENCES
+
+   73  A18              P   158, 877, 917, 921, 926, 948, 965,1111,1159,1194,1323
+  858  ADDROUT          D   676,1308
+  132  BASE             P   661, 845, 872, 874, 974,1305
+   78  BLANKS           C   242
+  349  BPT              D   341
+  468  BR0              D   310, 311, 312, 313, 314, 315, 316
+  558  BR10             D   540, 541, 542, 543, 544, 545, 546, 547
+  842  BRANCH           D   479, 569
+  115  BRT              P   669, 675, 853, 857, 930
+  116  CAND1            P   927, 934, 977, 982, 993,1017,1048
+  117  CAND2            P   914, 931, 935, 997,1019
+  119  CANDOK           P   928, 936, 978, 985, 991,1022,1051
+  398  CCOPS            D   373, 374, 375, 376
+  413  CC_ALL           D  
+  410  CC_NOP           D  
+  118  CMPMASK          P   918, 984, 994, 998,1021,1050
+  133  CONF             P   176, 190, 206, 235, 240, 893, 909,1082
+ 1120  CTLXFER          D  1041
+ 1134  CTX_NO           D  
+  123  CURADDR          P   949, 954, 972, 992, 996,1004,1011,1026,1097,1145
+  124  CURDATA          P   946, 959, 975, 981,1016,1040,1047,1053
+  103  CURSTAT          P   164, 173,1370,1389
+  251  DBL              D   215, 216, 217, 218, 219, 220, 223, 224, 225, 226, 227, 228
+  294  DBL_SCAN         D  
+  204  DECODE           D  
+  237  DEC_CHK          D  
+  120  DREADS           P   911,1036,1044,1046
+ 1243  EA               D   299, 302, 430, 440, 627, 642, 732, 744, 830
+  129  EAF              P  1245,1248
+  130  EAREG            P  1247,1267,1290,1295,1345,1347
+ 1280  EA_ADEC          D  1254
+ 1278  EA_ADECD         D  1255
+ 1266  EA_AINC          D  1252
+ 1264  EA_AINCD         D  1253
+ 1259  EA_DEF           D  1251
+ 1287  EA_IDX           D  1256
+ 1285  EA_IDXD          D  1257
+ 1293  EA_IDXM          D  
+ 1296  EA_IDXR          D  1292
+ 1272  EA_IMM           D  
+ 1301  EA_REL           D  
+  614  EIS_ASH          D   600
+  617  EIS_ASHC         D   601
+  611  EIS_DIV          D   599
+  608  EIS_MUL          D   598
+  619  EIS_SR           D   610, 613, 616
+  631  EIS_XOR          D   602
+  571  EMT              D   548
+  576  EMTN             D   573
+  807  FEA              D   728, 739, 791
+  644  FIS              D   603
+  134  FOUNDF           P   238, 906,1062
+  126  FOUNDV           P  1010,1014,1039,1042,1094,1113,1121,1135,1142,1163,1172,1199
+  746  FP0              D   683
+CROSS REFERENCE TABLE           Sat Oct 10 21:22:54 2026                   PAGE    28
+FILE: C:\IPDP11.S 
+LINE#   SYMBOL        TYPE     REFERENCES
+
+  755  FP00             D   748
+  777  FP1              D   684
+  796  FPAC             D   730, 734, 736, 741
+  681  FPP              D   229
+  740  FP_ACD           D   718, 719
+  735  FP_ACFD          D   716, 720
+  727  FP_FSAC          D   710, 711, 712, 713, 714, 715, 717, 723
+  731  FP_SAC           D   721, 722
+  128  FW               P   272, 277, 448, 622, 635, 702, 786, 823,1211,1216
+ 1210  FWORDS           D   271, 275, 447, 621, 634, 701, 785, 822
+ 1215  FW_1             D  
+  327  G00              D   309
+  335  G000             D   329
+  367  G002             D   331
+  307  GRP0             D   214
+  538  GRP10            D   222
+  596  GRP7             D   221
+   67  GUESSMAX         P  
+  888  ILLEGAL          D   324, 370, 371, 519, 554, 555, 604, 761, 762, 763, 764, 765, 766, 769, 770, 771, 772, 773
+  137  INTRV            P   916,1054
+  353  IOT              D   342
+  424  JMP              D   330
+  432  JSR              D   317, 318
+  445  JTGT             D   426, 434
+  457  JT_ABS           D  
+  463  JT_RD            D  
+  460  JT_REL           D  
+  139  LASTW            P  1174,1190,1192,1196
+  525  MARK             D   510
+  122  MS               P  1075,1077,1078,1079,1080,1096,1101,1102,1105,1144,1149,1150,1153,1161,1177,1179,1184,1185,1186
+ 1317  NEXTOPW          D  1274,1288
+   76  NOMATCH          P   913, 933,1018,1173
+  835  NOOPND           D   347, 352, 356, 365, 409, 412, 418, 775
+  105  NOPW             P   208, 273, 276, 278, 449, 623, 636, 703, 787, 824, 890, 923, 924,1025
+  121  NS               P   907, 939, 940, 941,1066,1095,1103,1143,1151,1175
+  114  NSKIP            P   210, 293, 364, 382, 465, 528,1225,1226,1227,1228,1229,1230,1231,1232,1237
+  109  NXOPW            P   922, 925, 963, 966
+ 1330  NXO_2            D  
+ 1333  NXO_MISS         D  
+  148  O1               C   395, 801, 811
+  147  O2               C   532
+  146  O3               C   581,1382
+  144  O6               C   896,1276,1291,1386
+  101  OPC              P   162, 212, 236, 269, 274, 282, 289, 297, 301, 383, 387, 394, 429, 439, 446, 450, 505, 531, 580, 620
+                            626, 633, 641, 654, 662, 700, 706, 738, 743, 784, 790, 797, 821, 825, 829, 846, 895,1341,1375,1378
+                           1385
+  107  OPW1             P  1328
+  108  OPW2             P  1331
+  111  OPWA             P  1303,1324
+  110  OPWI             P   211,1319,1320,1325,1326,1327
+  112  OPWMISS          P  1275,1289,1318,1334
+  106  OPWN             P   912, 953, 960, 961, 962, 969,1024,1034
+  145  P6               C  
+  102  PCA              P   159, 659, 843, 919,1321,1373
+CROSS REFERENCE TABLE           Sat Oct 10 21:22:54 2026                   PAGE    29
+FILE: C:\IPDP11.S 
+LINE#   SYMBOL        TYPE     REFERENCES
+
+  869  PCREL            D   668, 852, 976,1307
+  879  PCR_IO           D  
+   75  PG13             P   983,1020,1049
+ 1343  REG20            D   388, 655
+ 1340  REG86            D   437, 629, 639, 673
+ 1346  REGNAME          D  1250,1261,1269,1282,1298
+ ***   RETURN           U   943,1081,1106,1154,1187
+  357  RTI              D   340
+  379  RTS              D   369
+  360  RTT              D   344
+  362  RTXX             D   359
+  905  SCAN             D   295, 385, 392, 427, 435, 529, 578, 624, 637, 652, 671, 704, 788, 827, 836, 855, 892
+   66  SCANMAX          P   908
+ 1076  SCC_LOOP         D  1088
+ 1086  SCC_ZAP          D  
+  135  SCLIM            P   910
+ 1074  SC_CLR           D   239
+ 1055  SC_DATA          D  
+ 1033  SC_DR2           D  
+ 1043  SC_DR3           D  
+ 1003  SC_DREAD         D  
+  990  SC_FETCH         D  
+ 1059  SC_FOUND         D  
+ 1052  SC_INTR          D  
+ 1015  SC_ISVEC         D  
+  938  SC_LOOP          D   979, 986,1032,1058
+ 1093  SC_NEAR          D  1038
+  980  SC_OABS          D  
+ 1141  SC_PEEK          D  1009
+ 1171  SC_PUSH          D  1013
+ 1065  SC_TAG           D   968,1031,1057,1061
+ 1029  SC_VEC           D  
+ ***   SET              U   942
+ 1367  SHOWCYC          D   171, 246
+ 1380  SHOW_B           D  1376
+ 1387  SHOW_CT          D  1383
+ 1377  SHOW_HB          D  
+ 1398  SHOW_INT         D  
+ 1400  SHOW_TG          D  1397
+ 1384  SHOW_W           D  
+ 1100  SN_LOOP          D  
+  657  SOB              D   605
+  820  SOP              D   422, 507, 515, 523, 591, 753
+  481  SOP50            D   319, 550
+  489  SOP54            D   320, 551
+  497  SOP60            D   321, 552
+  508  SOP64            D   322
+  516  SOP70            D   323
+  504  SOPB             D   488, 496
+  584  SOPB64           D   553
+  390  SPL              D   372
+ 1183  SPU_LOOP         D  1197
+ 1198  SPU_YES          D  
+ 1148  SP_LOOP          D  
+CROSS REFERENCE TABLE           Sat Oct 10 21:22:54 2026                   PAGE    30
+FILE: C:\IPDP11.S 
+LINE#   SYMBOL        TYPE     REFERENCES
+
+ 1222  SRDS             D   287
+ 1309  STARS            D  
+  155  START            D  
+  420  SWAB             D   332
+  172  SYNCED           D  
+  191  SYNCPT           D   186
+  104  TAGCUR           P   167, 170, 177, 189, 245,1402,1403
+  127  TAGV             P   967,1030,1056,1060,1067
+   85  TG_DATA          P  1056
+   83  TG_FETCH         P   193,1060
+   84  TG_OPER          P   967
+   86  TG_VEC           P  1030
+  131  TMP              P   664, 665, 849, 850, 873, 876, 880,1099,1147,1182,1223,1234,1302,1306
+  574  TRAP             D   549
+  113  TTYPE            P   209, 288, 363, 381, 451, 458, 461, 464, 527, 670, 854, 891, 929, 932, 970, 971,1023,1035,1045
+   92  TT_BRANCH        P   670, 854
+   93  TT_OPWABS        P   458,1023
+   94  TT_OPWREL        P   461
+   95  TT_READ          P   363, 464
+   91  TT_SEQ           P   209, 891
+   96  TT_UNKN          P   288, 381, 451, 527
+   77  UTAGMASK         P   166,1084
+  125  VEC2A            P   915,1028
+  136  VECOK            P   207, 351, 355, 577,1006
+   68  VEC_LIMIT        P  
+  138  VP2              P  1162,1180
+   74  W16              P   161, 667, 851, 870, 881, 945
