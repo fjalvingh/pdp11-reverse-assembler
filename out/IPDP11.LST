@@ -1,4 +1,4 @@
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    1
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE    1
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -58,7 +58,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
                        54 *  keeps finding the next fetch within SCANMAX states.
                        55 *
                        56 ************************************************************************
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    2
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE    2
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -118,7 +118,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     0050 00000000     110 OPWI      VARIABLE  0               ; extension words printed so far
     0052 00000000     111 OPWA      VARIABLE  0               ; address of word being printed
     0054 00000000     112 OPWMISS   VARIABLE  0               ; extension word was not found
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    3
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE    3
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -178,7 +178,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     000A 161E         166           AND       UTAGMASK
     000B 0822         167           STORE     TAGCUR
     000C 100F         168           LOAD      INPUT_TAG
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    4
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE    4
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -238,7 +238,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     003D 5164         222           CALL      GRP10                   ; 10xxxx
     003E 5058         223           CALL      DBL                     ; 11 MOVB
     003F 5058         224           CALL      DBL                     ; 12 CMPB
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    5
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE    5
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -298,7 +298,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     0072 0823         278           STORE     NOPW
                       279 *
                       280 *  An instruction that writes the PC changes the flow of control.
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    6
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE    6
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -358,7 +358,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
                       334 
     00AD              335 G000
     00AD B8A301C0     336           IF        5,3 <> 0 THEN GOTO ILLEGAL
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    7
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE    7
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -418,7 +418,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     00DC              390 SPL
     00DC 605C0353     391           OUTPUT    "SPL"
     00DD 5289         392           CALL      SCAN
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    8
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE    8
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -478,7 +478,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     0110 101F         446           LOAD      OPC
     0111 53F7         447           CALL      FWORDS
     0112 103A         448           LOAD      FW
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE    9
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE    9
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -538,7 +538,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     0148 60980341     502           OUTPUT    "ASL"
     0144 0004         503           CASE_END
     0149              504 SOPB
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   10
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE   10
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -598,7 +598,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     0176              558 BR10
     0176 E1480177     559           CASE_OF   10,8
     0178 60B00342     560           OUTPUT    "BPL"
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   11
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE   11
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -658,7 +658,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     019F              614 EIS_ASH
     019F 60D60341     615           OUTPUT    "ASH"
     01A0 41A2         616           GOTO      EIS_SR
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   12
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE   12
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -718,7 +718,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     01D0 322B         670           SET       TTYPE,TT_BRANCH
     01D1 5289         671           CALL      SCAN
     01D2 02C9         672           POSITION  ABS,9
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   13
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE   13
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -778,7 +778,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
                       726 
     0203              727 FP_FSAC
     0203 5242         728           CALL      FEA
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   14
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE   14
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -838,7 +838,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     0233 613B044E     782           OUTPUT    "NEGF"
     022F 0004         783           CASE_END
     0234 101F         784           LOAD      OPC
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   15
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE   15
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -898,7 +898,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
                       838 
                       839 *
                       840 *  BRANCH - 8 bit word offset in OPC (mnemonic already output)
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   16
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE   16
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -958,7 +958,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     0285 02C9         894           POSITION  ABS,9
     0286 101F         895           LOAD      OPC
     0287 701E         896           OUTPUT    ACCUMULATOR,O6
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   17
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE   17
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -1018,7 +1018,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     02BF 100E         950           LOAD      INPUT_STATUS
     02C0 A44201C1     951           IF        2,2 = 1 THEN GOTO SC_INTR      ; INTR transfer
     02C3 A42101C1     952           IF        1,1 = 1 THEN GOTO SC_DATA      ; DATO / DATOB
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   18
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE   18
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -1078,7 +1078,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     0305 844201C0    1006           IF        VECOK = 0 THEN GOTO SC_DR2
     0308 AFE0001A    1007           IF        31,0 >= VEC_LIMIT THEN GOTO SC_DR2
     030B A40001C1    1008           IF        0,0 = 1 THEN GOTO SC_DR2
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   19
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE   19
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -1138,7 +1138,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     0350 3240        1062           SET       FOUNDF,1
     0351 0013        1063           RETURN
                      1064 
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   20
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE   20
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -1198,7 +1198,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
                      1118 *            branch, JMP, JSR, RTS, RTI or RTT
                      1119 *
     0389             1120 CTLXFER
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   21
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE   21
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -1258,7 +1258,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     03D2 0845        1174           STORE     LASTW
     03D3 1033        1175           LOAD      NS
     03D4 15C3        1176           SUBTRACT  3
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   22
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE   22
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -1318,7 +1318,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     040B 342C        1230           SET       NSKIP,2
     040C 322C        1231           SET       NSKIP,1
     040D 342C        1232           SET       NSKIP,2
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   23
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE   23
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -1378,7 +1378,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     043E 61500140    1286           OUTPUT    "@"
     043F             1287 EA_IDX
     043F 5459        1288           CALL      NEXTOPW
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   24
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE   24
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -1438,7 +1438,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     046E 0246        1342           ROTATE    RIGHT,6
     046F             1343 REG20
     046F 17C7        1344           AND       7
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   25
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE   25
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -1498,7 +1498,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     049F             1398 SHOW_INT
     049F 61770549    1399           OUTPUT    "INTR "
     04A0             1400 SHOW_TG
-HEWLETT-PACKARD: Inverse Assembly Language                           Sat Oct 10 21:22:54 2026                              PAGE   26
+HEWLETT-PACKARD: Inverse Assembly Language                           Sun Oct 11 15:03:54 2026                              PAGE   26
 FILE: C:\IPDP11.S
 LOCATION OBJECT CODE LINE     SOURCE LINE
 
@@ -1508,7 +1508,7 @@ LOCATION OBJECT CODE LINE     SOURCE LINE
     04A7 0013        1404           RETURN
 
 Errors=    0
-CROSS REFERENCE TABLE           Sat Oct 10 21:22:54 2026                   PAGE    27
+CROSS REFERENCE TABLE           Sun Oct 11 15:03:54 2026                   PAGE    27
 FILE: C:\IPDP11.S 
 LINE#   SYMBOL        TYPE     REFERENCES
 
@@ -1566,7 +1566,7 @@ LINE#   SYMBOL        TYPE     REFERENCES
   134  FOUNDF           P   238, 906,1062
   126  FOUNDV           P  1010,1014,1039,1042,1094,1113,1121,1135,1142,1163,1172,1199
   746  FP0              D   683
-CROSS REFERENCE TABLE           Sat Oct 10 21:22:54 2026                   PAGE    28
+CROSS REFERENCE TABLE           Sun Oct 11 15:03:54 2026                   PAGE    28
 FILE: C:\IPDP11.S 
 LINE#   SYMBOL        TYPE     REFERENCES
 
@@ -1624,7 +1624,7 @@ LINE#   SYMBOL        TYPE     REFERENCES
   106  OPWN             P   912, 953, 960, 961, 962, 969,1024,1034
   145  P6               C  
   102  PCA              P   159, 659, 843, 919,1321,1373
-CROSS REFERENCE TABLE           Sat Oct 10 21:22:54 2026                   PAGE    29
+CROSS REFERENCE TABLE           Sun Oct 11 15:03:54 2026                   PAGE    29
 FILE: C:\IPDP11.S 
 LINE#   SYMBOL        TYPE     REFERENCES
 
@@ -1682,7 +1682,7 @@ LINE#   SYMBOL        TYPE     REFERENCES
  1183  SPU_LOOP         D  1197
  1198  SPU_YES          D  
  1148  SP_LOOP          D  
-CROSS REFERENCE TABLE           Sat Oct 10 21:22:54 2026                   PAGE    30
+CROSS REFERENCE TABLE           Sun Oct 11 15:03:54 2026                   PAGE    30
 FILE: C:\IPDP11.S 
 LINE#   SYMBOL        TYPE     REFERENCES
 
