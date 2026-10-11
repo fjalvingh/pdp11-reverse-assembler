@@ -31,6 +31,12 @@ instructions, EIS (MUL DIV ASH ASHC XOR SOB), FIS (FADD ...), FP11 floating
 point, MARK, SPL, MFPI/MTPI/MFPD/MTPD, MFPS/MTPS, SXT, MFPT, CSM, TSTSET,
 WRTLCK. Anything else shows as `.WORD nnnnnn`.
 
+## Example on an 16702A:
+
+This uses the [Unibus Terminator with LA probe](https://github.com/fjalvingh/unibus-la-terminator) to connect the logical analyzer to a PDP 11/05. The trace is of the 11/05 waiting for console input while running the console prom from the m9312:
+
+![The HP 16702A showing a state listing with the disassembler aboard](disassembler-1.png)
+
 ## Files
 
 | Path | What |
@@ -73,6 +79,8 @@ Under DOSBox or real DOS, do the same thing by hand: put `AIAL` in
   you can pick it from the Invasm pull-down in the Listing window.
 * Or copy `out/IPDP11.R` and convert it with the IA Format utility into
   `/logic/ia`, then load it from the Listing window.
+* FTP the file to /logic, then load with the File Manager. The File Manager
+  will convert the file and put it in the "ia" directory after.  
 
 1650/16500 series: copy `out/IPDP11` to an LIF/DOS floppy, or download
 `IPDP11.R` with IALDOWN. Choose Invasm field option **B**.
@@ -85,11 +93,11 @@ Invasm.
 
 Use a state analyzer with these labels:
 
-| Label | Bits | Signals |
-|---|---|---|
-| `ADDR` | 18 | A17..A00 |
-| `DATA` | 16 | D15..D00 |
-| `STAT` | 3 | bit 0 = C0, bit 1 = C1, bit 2 = INTR (optional, tie low if not probed) |
+| Label | Bits | Signals | Remarks |
+|---|---|---| --- | 
+| `ADDR` | 18 | A17..A00 | Use '-' on the signals: Unibus signals are inverted! |
+| `DATA` | 16 | D15..D00 | Use '-' on the signals: Unibus signals are inverted! |
+| `STAT` | 3 | bit 0 = C0, bit 1 = C1, bit 2 = INTR (optional, tie low if not probed) | Use '-' on the signals: Unibus signals are inverted! |
 
 * All Unibus signals are asserted low. Set the polarity of all three labels
   to **negative**, so that 1 = asserted and the ADDR/DATA columns read
@@ -104,6 +112,12 @@ Use a state analyzer with these labels:
   identify the vector fetch. Without it the IA still recognises interrupts
   (see below).
 * Set the ADDR column base to octal to match the mnemonics.
+* Make sure to set the clock signal on SSYN, rising.
+
+Example format on the HP 16702A:
+
+![HP 16702A format](hp-setup-1.png)
+
 
 ## Using it
 
